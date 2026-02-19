@@ -1,0 +1,305 @@
+// ================================= RANDOM FOREST SCRIPT USAGE ========================================================//
+//    1. Select the year in line 17
+//    2. Create or select the asset to export the output in line 27 or 28
+//    3. Create or select the google drive folder to export the output in line 35
+//    4. To run Random Forest for any of the countries or ecoregion, input the name in script line 60
+//    6. Select the annual composites for the select ecoregion in line 72
+//    7. Select the corresponding training data using either Ghana_train_pts, or Nigeria_train_pts in script line 105
+//    8. Select the corresponding validation data using either Ghana_val_pts, BT_val_pts, or Nigeria_val_pts in script line 114
+//    9. The default output export location is GEE Asset (line 269), or if you rather export to GD, change in line 273 to true
+
+// =====================================================================================================================//
+//                    STEP ONE: DETERMINE THE YEAR, OUTPUT DATA NAME AND EXPORT FOLDER PATH
+// =====================================================================================================================//
+// Specify the beginning year to ran the Random Forest model, and year to download
+// User input of the year to be summarized and exported, from 2001 to the present year
+var yearC = 2021; 
+
+// Initial year in the image composite time series - this should remain set to 2001
+var year_init = 2000;
+
+// Date to assign to output image
+var dateC = yearC +'-01-01'; 
+
+// Set up paths to GEE assets
+// Path to main ImageCollection where tree cover maps will be saved
+//var canopy_Asset = 'projects/ee-kora0003/assets/Ghana_TC_RF_GFS/';//***** User input as desired
+var canopy_Asset = 'projects/earthengine-legacy/assets/users/korahandrews/Nigeria_TC_RF_NLF/';//Nigeria_TC_RF_NLF/***** User input as desired
+
+// Name of the canopy cover image to be saved
+var outfile_name = 'TreeCover_RF_' + yearC; //RF tree cover predictions from a particular composite
+
+// Destination folder in your Google Drive (GD), if applicable
+// If exporting image to GD, create a folder in you GD then paste folder name in space provided below
+var myGoogleDrive_Folder = 'kora0003/EGF/Ghana_Tree_Cover';//Nigeria_Tree_Cover //***** User input as desired
+
+
+//======================================================================================================================//
+//              STEP TWO: READ IN COUNTRY BOUNDARIES FOR THE STUDY AREA
+//======================================================================================================================// 
+// Subset the West Africa country of interest from the Large Scale International Boundary dataset.
+// Here is the list of the countries in the region and associated FIPS codes
+// Ghana(GH), Togo(TO), Benin(BN), Nigeria(NI), Cote d'Ivoire(IV), Burkina Faso(UV), Niger(NG), Mali(ML), Mauritania(MR),
+// Gambia, The(GA), Senegal(SG), Guinea-Bissau(PU), Guinea(GV), Liberia(LI), Sierra Leone(SL), Cape Verde(CV)
+var countries = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017");
+var Ghana = countries.filter(ee.Filter.eq('country_co', 'GH'));
+var Nigeria = countries.filter(ee.Filter.eq('country_co', 'NI'));
+
+var biomes = ee.FeatureCollection("projects/ee-koraha/assets/Ecoregions");
+
+// Filter ecoregions for Ghana
+var ghana_ecoregions = biomes.filter(ee.Filter.eq('Country', 'Ghana')); //("projects/ee-koraha/assets/mod_ghana_ecoregions");
+var Ghana_egf = ghana_ecoregions.filter(ee.Filter.eq('ECO_NAME', 'Eastern Guinean Forest'));
+
+// Filter ecoregions for Nigeria
+var Nigeria_ecoregions = biomes.filter(ee.Filter.eq('Country', 'Nigeria'));
+var Nigeria_nlf = Nigeria_ecoregions.filter(ee.Filter.eq('ECO_NAME', 'Nigerian Lowlands Forest'));
+
+// Specify ecoregions for each courtry
+var EGF_NLF = Ghana_egf;//Nigeria_nlf//Ghana_egf
+var studycountries = EGF_NLF;
+
+// Center and Zoom
+Map.centerObject(studycountries, 8); 
+
+//======================================================================================================================//
+//              STEP THREE: READ IN IMAGE COLLECTION OF ANNUAL OF ANNUAL SPECTRAL COMPOSITES
+//======================================================================================================================// 
+var EGF_composites1 = ee.ImageCollection("users/korahandrews/Ghana_TC_Comp_EGF");//.filter(ee.Filter.gt('year', 2000));
+var NLF_composites1 = ee.ImageCollection("users/korahandrews/Nigeria_TC_Comp_NLF");
+
+var composite = EGF_composites1.filterBounds(studycountries);//NLF_composites1, EGF_composites1
+
+var studycomposite = composite;
+var annual_composites = studycomposite;
+print(annual_composites, "Annual Image Composites");
+
+// Convert image collection of annual composites to a list object
+var ann_comp_list = annual_composites.toList(annual_composites.size());
+print(ann_comp_list, "Annual Image Composites List");
+
+// Double check that study year and output file names correctly match
+print("Study year", yearC);
+print('output name: ', outfile_name);
+
+
+// ====================================================================================================================//
+//                      STEP FOUR: IMPORT THE TRAINING AND VALIDATION DATASETS FOR EACH COUNTRY
+// ====================================================================================================================//
+var Ghanatrees = ee.FeatureCollection ("projects/ee-kora0003/assets/Ghana_R_Training");
+var Nigeriatrees = ee.FeatureCollection ("projects/ee-kora0003/assets/Nigeria_R_Training");
+
+var trees = Ghanatrees;
+
+var trees_data = trees.randomColumn('random');
+var split = 0.75;  // Roughly 75% training, 25% testing.
+var reserves_training = trees_data.filter(ee.Filter.lt('random', split));
+var reserves_validation = trees_data.filter(ee.Filter.gte('random', split));
+
+var Ghana_train_pts =ee.FeatureCollection("projects/ee-koraha/assets/Ghana_Training_Points")
+.merge(reserves_training).merge("projects/ee-kora0003/assets/Ghana_NR_Training1").merge("projects/ee-kora0003/assets/Ghana_R_TrainingGFS");
+var Nigeria_train_pts =ee.FeatureCollection("projects/ee-koraha/assets/NGA_Training_Points")
+.merge(reserves_training).merge("projects/ee-korahandrews/assets/Nigeria_NR_Training");
+
+// Training points. Use Ghana_train_pts, or Nigeria_train_pts
+var train_pts = Ghana_train_pts;
+
+//Import the validation data for assessing the performs of the impervious cover predictions ===========================//
+var Ghana_val_pts = ee.FeatureCollection("projects/ee-koraha/assets/Ghana_Validation_Points")
+.merge(reserves_validation);
+var Nigeria_val_pts = ee.FeatureCollection("projects/ee-koraha/assets/NGA_Validation_Points")
+.merge(reserves_validation);
+
+// Validation points. Use Ghana_val_pts, or Nigeria_val_pts
+var val_pts = Ghana_val_pts;
+//print(val_pts, "Validation Points");
+
+//=====================================================================================================================//
+//                   STEP FIVE: OVERLAY THE TRAINING DATA AND ANNUAL SPECTRAL COMPOSITES etc HERE-----
+//=====================================================================================================================//
+print("Step 5: Set up image parameters");
+
+// This step involves importing composites, subsetting spectral data, sampling reference data
+
+// Indicate names of spectral data/indices to subset for RF predictions
+var bands = ["wt", "ndvi", "ndmi", "evi", "ndfi", "br", "gr", "ndfi2", "npv"];
+
+var inImage = ee.Image(ann_comp_list.get(yearC - year_init)).select(bands)
+                                                             .clip(studycountries) // crop input image to country boundary
+                                                             .rename(bands); //Rename bands to original indices names
+//print(inImage)
+// Import several reference images (2001 to 2020)and subset desired bands for training 
+// NB: These images are for years with sufficient training data to train the RF model
+
+var sumyear = [2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 
+2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021];
+print (sumyear, "sumyear");
+
+// Function to overlay training points on the image composites one year at a time
+function overlay_pts(sumyear) {
+  var baseyr = sumyear; // Year of base image to import for RF training 
+  var base_img = ee.Image(ann_comp_list.get(baseyr - year_init)).select(bands)
+                                                                .clip(studycountries)
+                                                                .rename(bands);
+ 
+  // Subset training points corresponding to the respective base image year
+  var pts = train_pts.filter(ee.Filter.eq('Year', baseyr));
+//print(pts, 'points');
+ 
+  // Overlay training points on corresponding composite image to create FeatureCollection 
+  var training = base_img.sampleRegions({
+                collection: pts,
+                properties: ['Trs_Pct', 'Year'], //field containing canopy cover readings 
+                scale: 30,
+                //geometries: false, // omit geometries to save memory and avoid GEE timing out
+                tileScale : 1  //parameter to reduce the chances of running into memory problems 
+  });
+  return training;
+}
+
+// Map the training point overlay function over the summary years
+var training_d = ee.FeatureCollection(sumyear.map(overlay_pts)).flatten();
+/////////////////////////////////////////////////////////////////
+
+//print('Joined table ', training_d);
+
+//=====================================================================================================================//
+//                   STEP SIX: RANDOM FOREST REGRESSION FOR TREE CANONPY COVER PREDICTION
+//=====================================================================================================================//
+print('Step 6: Random Forest modeling');
+
+//--- Make a Random Forest classifier and train it 
+// This line of codes generate a random forest regression
+var rfregression = ee.Classifier.smileRandomForest({
+                  numberOfTrees: 1000,
+                  variablesPerSplit:6,
+                  minLeafPopulation: 7,
+                  bagFraction: 0.65,
+                  //outOfBagMode: true,
+                }).setOutputMode('REGRESSION');
+
+// Train the classifier with the trainning data
+var trained_classifier = rfregression.train({
+                      features: training_d,
+                      classProperty: 'Trs_Pct',
+                      inputProperties: bands
+});
+
+var dict = trained_classifier.explain();
+//print('Explain:', dict);
+
+//----- Run the Random Forest Model -----
+// Use the trained classifier to classify the image input
+var classified_cc = inImage.classify(trained_classifier)
+                   .set('year', yearC) // Set date properties to image
+                   .set('date', dateC)
+                   .set('system:time_start', ee.Date.fromYMD(yearC, 1,1).millis());
+ 
+//print ('classified_cc', classified_cc); 
+
+// Visualize map of tree cover 
+//Palette for percent tree cover
+var cc_vis = {min:10, max:90, palette: ['f7fcf5', '00441b']};
+Map.addLayer(classified_cc, cc_vis, 'Percent Tree Cover', 0);
+
+
+//=====================================================================================================================//
+//                         STEP SEVEN: VALIDATION OF RANDOM FOREST REGRESSION MODEL
+//=====================================================================================================================//
+print('Step 7: Random Forest model validation');
+
+// Function to overlay the validation points on the image composite layers one year at a time
+function overlay_pts2(inyear) {
+  var baseyr = inyear; // Year of base image to import for RF training 
+  var base_img = ee.Image(ann_comp_list.get(baseyr - year_init)).select(bands)
+                                                                .clip(studycountries) 
+                                                                .rename(bands); 
+  
+  // Subset validation points to the base year
+  var pts = val_pts.filter(ee.Filter.eq('Year', baseyr));
+
+  // Overlay validation points on the correponding composite image to create a FeatureCollection
+  var validation = base_img.sampleRegions({
+                collection: pts,
+                properties: ['Trs_Pct', 'Year'], //field containing canopy cover readings 
+                scale: 30,
+                geometries: false, // omit geometries to save memory and avoid GEE timing out
+                tileScale : 10  //parameter to reduce the chances of running into memory problems 
+  });
+  return validation;
+}
+
+// Map the training point overlay function over the summary years
+var validation_df = ee.FeatureCollection(sumyear.map(overlay_pts2)).flatten();
+
+// Use the random forest model to classify the validation points
+var validated_cc = validation_df.classify(trained_classifier);
+//print("validation export table", validated_cc);
+
+// Export the validation data to Google Drive
+/*
+Export.table.toDrive({
+  collection: validated_cc, 
+  description: "Validation_TreeCov",
+  folder: myGoogleDrive_Folder
+});
+ 
+// Export the validation data to Google Drive
+Export.table.toDrive({
+  collection: training_d, 
+  description: "Training_TreeCov",
+  folder: myGoogleDrive_Folder
+});
+
+var exportImg = false;
+if(exportImg){
+      Export.table.toDrive({
+  collection: validation_pts,
+  description: "Nigeria_Validation_Points",
+  fileFormat: 'SHP'
+      });
+} else {}
+*/
+//=====================================================================================================================//
+//                        STEP EIGHT: EXPORTING DATA TO GEE ASSET (OR GOOGLE DRIVE)
+//=====================================================================================================================//
+print("Step 8: Export Tree Cover Image");
+
+// Exporting data to GEE Asset
+var exportImg = true;
+//print(exportImg, "exportImg");
+
+// Exporting data to Google Drive
+var exportImgtoDrive = false;
+//print(exportImgtoDrive, "exportImgtoDrive");
+
+
+if(exportImg){
+      // 
+      Export.image.toAsset({
+        image: classified_cc,                 // image to export
+        description: outfile_name,            // file name of exported image
+        scale: 30,                            // pixel size
+        assetId: canopy_Asset + outfile_name, // export image to this path in GEE asset
+        region: studycountries,                    //aoi of image area to export
+        maxPixels: 1e13                   //1e13
+      });
+} else {}
+
+
+// --If you are exporting data to Google drive--
+
+if(exportImgtoDrive){
+      // 
+      Export.image.toDrive({
+        image: classified_cc, // image to export
+        description: outfile_name, // file name of exported image
+        scale: 30, // pixel size
+        folder: myGoogleDrive_Folder, // Destination folder in your Google Drive
+        region: studycountries, //aoi of image area to export
+        maxPixels: 1e13
+
+      });
+} else {}
+
+print("END");
